@@ -10,7 +10,7 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-certs-k8c-io-v1-pod
+      path: /mutate-certs-k8c-io-v1-certificate
   failurePolicy: Fail
   name: mcertificate.kb.io
   rules:
@@ -30,7 +30,7 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-certs-k8c-io-v1-pod
+      path: /validate-certs-k8c-io-v1-certificate
   failurePolicy: Fail
   name: vcertificate.kb.io
   rules:
