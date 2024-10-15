@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// +kubebuilder:webhook:path=/validate-certs-k8c-io-v1-pod,mutating=true,failurePolicy=fail,sideEffects=None,groups="certs.k8c.io",resources=certificates,verbs=create;update,versions=v1,name=vcertificate.kb.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-certs-k8c-io-v1-certificate,mutating=true,failurePolicy=fail,sideEffects=None,groups="certs.k8c.io",resources=certificates,verbs=create;update,versions=v1,name=vcertificate.kb.io,admissionReviewVersions=v1
 
 // CertificateValidator validates Certificate Resource
 type CertificateValidator struct {
