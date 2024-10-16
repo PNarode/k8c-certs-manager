@@ -13,7 +13,8 @@ import (
 	"time"
 )
 
-// +kubebuilder:webhook:path=/validate-certs-k8c-io-v1-certificate,mutating=true,failurePolicy=fail,sideEffects=None,groups="certs.k8c.io",resources=certificates,verbs=create;update,versions=v1,name=vcertificate.kb.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-certs-k8c-io-v1-certificate,mutating=false,failurePolicy=fail,sideEffects=None,groups="certs.k8c.io",resources=certificates,verbs=create;update,versions=v1,name=vcertificate.kb.io,admissionReviewVersions=v1
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 // CertificateValidator validates Certificate Resource
 type CertificateValidator struct {
@@ -29,15 +30,13 @@ func (v *CertificateValidator) validate(ctx context.Context, obj runtime.Object)
 		return nil, fmt.Errorf("expected a Certificate but got a %T", obj)
 	}
 
-	log.Info("Validating Certificate Request")
-
 	validityValue, found := cert.Annotations["validityInHours"]
 	if !found {
-		return nil, fmt.Errorf("invalid value %s for Validity field, should end with `h`(hours), `d`(days) or `y`(years) e:g 1y, 20d", cert.Spec.Validity)
+		return nil, fmt.Errorf("no validity value annotations found")
 	}
 	_, err := time.ParseDuration(validityValue)
 	if err != nil {
-		return nil, fmt.Errorf("invalid value %s for Validity field, should end with `h`(hours), `d`(days) or `y`(years) e:g 1y, 20d", cert.Spec.Validity)
+		return nil, fmt.Errorf("invalid value %s for Validity field err: %s", validityValue, err.Error())
 	}
 
 	renewBefore, err := time.ParseDuration(cert.Spec.RenewBefore)
@@ -53,6 +52,7 @@ func (v *CertificateValidator) validate(ctx context.Context, obj runtime.Object)
 
 func (v *CertificateValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	logger := logf.FromContext(ctx)
+	logger.Info("Validating Create Certificate Request")
 	cert, ok := obj.(*v1.Certificate)
 	if !ok {
 		return nil, fmt.Errorf("expected a Certificate but got a %T", obj)
@@ -63,35 +63,13 @@ func (v *CertificateValidator) ValidateCreate(ctx context.Context, obj runtime.O
 		logger.Info("TLS secret reference already exists", "Secret", cert.Spec.SecretRef)
 		return nil, fmt.Errorf("TLS secret reference already exists")
 	}
-	cert.Annotations["requestType"] = "CreateRequest"
 	return v.validate(ctx, obj)
 }
 
 func (v *CertificateValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	logger := logf.FromContext(ctx)
-	warn, err := v.validate(ctx, newObj)
-	if err != nil {
-		return warn, err
-	}
-	oldCert, ok := oldObj.(*v1.Certificate)
-	if !ok {
-		return nil, fmt.Errorf("expected a Certificate but got a %T", oldObj)
-	}
-	newCert, ok := newObj.(*v1.Certificate)
-	if !ok {
-		return nil, fmt.Errorf("expected a Certificate but got a %T", oldObj)
-	}
-	if oldCert.Spec.SecretRef != newCert.Spec.SecretRef {
-		secret := &corev1.Secret{}
-		err = v.Get(ctx, types.NamespacedName{Name: oldCert.Spec.SecretRef.Name, Namespace: oldCert.Namespace}, secret)
-		if err == nil {
-			logger.Info("TLS secret reference already exists", "Secret", oldCert.Spec.SecretRef)
-			logger.Info("Adding resource annotations to cleanup older secret")
-			newCert.Annotations["deleteSecret"] = oldCert.Spec.SecretRef.Name
-		}
-	}
-	newCert.Annotations["requestType"] = "UpdateRequest"
-	return warn, err
+	logger.Info("Validating Update Certificate Request")
+	return v.validate(ctx, newObj)
 }
 
 func (v *CertificateValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {

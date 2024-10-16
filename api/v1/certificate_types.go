@@ -100,9 +100,10 @@ type CertificateSpec struct {
 
 // CertificateStatus defines the observed state of Certificate
 type CertificateStatus struct {
-	Conditions []metav1.Condition `json:"conditions"`
-	ExpiryDate metav1.Time        `json:"expiryDate,omitempty"`
-	RenewedAt  metav1.Time        `json:"renewedAt,omitempty"`
+	ExpiryDate         metav1.Time `json:"expiryDate,omitempty"`
+	RenewedAt          metav1.Time `json:"renewedAt,omitempty"`
+	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
+	SecretRef          string      `json:"secretRef,omitempty"`
 }
 
 // +kubebuilder:object:root=true

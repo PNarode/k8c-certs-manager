@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/runtime"
-
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -59,14 +58,14 @@ func (a *CertificateAnnotator) Default(ctx context.Context, obj runtime.Object) 
 			log.Error(err, "failed to parse validity value for certificate")
 			return fmt.Errorf("failed to parse validity value for certificate")
 		}
-		cert.Annotations["validityInHours"] = fmt.Sprintf("%vh", time.Duration(days)*24)
+		cert.Annotations["validityInHours"] = fmt.Sprintf("%vh", days*24)
 	case "y":
 		year, err := strconv.Atoi(strings.TrimSuffix(validityValue, "y"))
 		if err != nil {
 			log.Error(err, "failed to parse validity value for certificate")
 			return fmt.Errorf("failed to parse validity value for certificate")
 		}
-		cert.Annotations["validityInHours"] = fmt.Sprintf("%vh", time.Duration(year)*365*24)
+		cert.Annotations["validityInHours"] = fmt.Sprintf("%vh", year*365*24)
 	case "h":
 		_, err := time.ParseDuration(validityValue)
 		if err != nil {
@@ -79,9 +78,12 @@ func (a *CertificateAnnotator) Default(ctx context.Context, obj runtime.Object) 
 	if cert.Spec.RenewBefore == "" {
 		cert.Spec.RenewBefore = "5m"
 	}
-
-	cert.Annotations["requestType"] = ""
+	cert.Annotations["requestType"] = "UpdateRequest"
+	log.Info("Mutating State of ", "ObservedGeneration: ", cert.Status.ObservedGeneration)
+	if cert.Status.ObservedGeneration == 0 {
+		log.Info("Its a create operation")
+		cert.Annotations["requestType"] = "CreateRequest"
+	}
 	log.Info("Mutation for Certificate Completed")
-
 	return nil
 }

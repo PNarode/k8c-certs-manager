@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"github.com/PNarode/k8c-certs-manager/internal/controller"
 	"os"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 
@@ -37,7 +38,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	certsv1 "github.com/PNarode/k8c-certs-manager/api/v1"
-	"github.com/PNarode/k8c-certs-manager/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -94,6 +94,8 @@ func main() {
 	}
 
 	webhookServer := webhook.NewServer(webhook.Options{
+		//Host:    "127.0.0.1",        // UnComment these lines when
+		//CertDir: "webhook-certs",    // you have to test your webhook locally
 		TLSOpts: tlsOpts,
 	})
 
@@ -145,13 +147,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.CertificateReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Certificate")
-		os.Exit(1)
-	}
+	//if err = (&controller.CertificateReconciler{
+	//	Client: mgr.GetClient(),
+	//	Scheme: mgr.GetScheme(),
+	//}).SetupWithManager(mgr); err != nil {
+	//	setupLog.Error(err, "unable to create controller", "controller", "Certificate")
+	//	os.Exit(1)
+	//}
 
 	if err := builder.WebhookManagedBy(mgr).
 		For(&certsv1.Certificate{}).

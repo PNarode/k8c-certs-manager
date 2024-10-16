@@ -7,16 +7,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	certsv1 "github.com/PNarode/k8c-certs-manager/api/v1"
+	"math/big"
 	"time"
-)
-
-const (
-	ConditionPending  string = "Pending"
-	ConditionIssued   string = "Issued"
-	ConditionRenewing string = "Renewing"
-	ConditionRenewed  string = "Renewed"
-	ConditionExpired  string = "Expired"
-	ConditionFailed   string = "Failed"
 )
 
 // GenerateSelfSignedCertificate generates a new self-signed certificate
@@ -46,9 +38,11 @@ func GenerateSelfSignedCertificate(cert certsv1.Certificate) ([]byte, []byte, er
 		Subject:               subject,
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
+		SerialNumber:          new(big.Int),
 		IsCA:                  false,
 		BasicConstraintsValid: true,
 	}
+	template.SerialNumber.SetString(details.Subject.SerialNumber, 10)
 	// Create a certificate
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
 	if err != nil {

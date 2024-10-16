@@ -18,9 +18,7 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"github.com/PNarode/k8c-certs-manager/internal/helper"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"reflect"
@@ -58,7 +56,7 @@ type CertificateReconciler struct {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.0/pkg/reconcile
 func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-
+	logger.Info("Reconcile Event: Certificate Reconcilation Started")
 	// Fetch the Certificate instance
 	certificate := &certsv1.Certificate{}
 	err := r.Get(ctx, types.NamespacedName{Name: req.Name, Namespace: req.Namespace}, certificate)
@@ -69,7 +67,6 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Fetch Request Type annotation from Certificate Request Object
 	requestType, found := certificate.Annotations["requestType"]
-
 	// No Request Type Annotation found. So perform normal Controller Reconcilation logic
 	if !found {
 		logger.Info("Reconcile Event: Attempting to check if Certificate Exists")
@@ -78,12 +75,13 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// Reconcile and Create missing secrets
 		if err != nil {
 			logger.Info("Reconcile Event: Certificate TLS secret reference does not exists", "Secret", certificate.Spec.SecretRef)
+			logger.Info("Reconcile Event: Attempting to bring resource to desired state")
 			err = r.createCertificate(ctx, *certificate, nil, req, "ReconileRequest")
 			if err != nil {
-				logger.Error(err, "Reconcile Event:")
-				return ctrl.Result{}, err
+				logger.Error(err, "Reconcile Event: Failed to bring resource to desired state")
+				return ctrl.Result{}, client.IgnoreAlreadyExists(err)
 			}
-			return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
+			return ctrl.Result{}, nil
 		}
 
 		// Reconcile and Check if Certificate Renewal is Required
@@ -97,67 +95,116 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Error(err, "Reconcile Event: Failed to renew certificate")
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
+			return ctrl.Result{}, nil
 		}
 	}
 
+	logger.Info("Reconcile Event: Event Detected", "RequestType", requestType)
 	switch requestType {
 	case "CreateRequest":
-		logger.Info("Create Event: Attempting to create new certificate and secret")
+		logger.Info("Reconcile Create Event: Attempting to create new certificate and secret")
 		err = r.createCertificate(ctx, *certificate, nil, req, "CreateRequest")
 		if err != nil {
-			logger.Error(err, "Reconcile Event:")
+			if client.IgnoreAlreadyExists(err) != nil {
+				return ctrl.Result{}, err
+			}
+			logger.Info("Reconcile Create Event: Failed as Certificate already exists")
+		}
+		delete(certificate.GetAnnotations(), "requestType")
+		err = r.Update(ctx, certificate)
+		if err != nil {
+			logger.Error(err, "Reconcile Create Event: Failed to update certificate annotation")
 			return ctrl.Result{}, err
 		}
-		logger.Info("Create Event: Complete. Staring reconcile loop")
-		delete(certificate.GetAnnotations(), "requestType")
+		logger.Info("Reconcile Create Event: Ended")
 	case "UpdateRequest":
-		logger.Info("Update Event: Attempting to update certificate and secret")
+		logger.Info("Reconcile Update Event: Attempting to update certificate and secret")
+		olderSecret := ""
 		secret := &corev1.Secret{}
 		err = r.Get(ctx, types.NamespacedName{Name: certificate.Spec.SecretRef.Name, Namespace: req.Namespace}, secret)
-		// Reconcile and Create missing secrets
 		if err != nil {
-			err = r.createCertificate(ctx, *certificate, nil, req, "UpdateRequest")
-		} else {
-			err = r.createCertificate(ctx, *certificate, secret, req, "UpdateRequest")
-		}
-		if err != nil {
-			logger.Info("Update Event: failed to update the certificate and secret")
-			return ctrl.Result{}, err
-		}
-		delete(certificate.GetAnnotations(), "requestType")
-		deleteSecret, found := certificate.Annotations["deleteSecret"]
-		if found {
-			err = r.Get(ctx, types.NamespacedName{Name: deleteSecret, Namespace: req.Namespace}, secret)
-			if err == nil {
-				logger.Info("Update Event: cleanup of older secret")
-				err = r.Delete(ctx, secret)
-				if err != nil {
-					logger.Error(err, "Update Event: failed to clean older secret")
-					certificate.Annotations["requestType"] = "CleanupRequest"
-					return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
-				}
-				delete(certificate.GetAnnotations(), "deleteSecret")
+			logger.Info("Reconcile Update Event: Certificate TLS secret reference does not exists", "Secret", certificate.Spec.SecretRef)
+			if certificate.Status.SecretRef != certificate.Spec.SecretRef.Name {
+				logger.Info("Reconcile Update Event: TLS secret reference changed.")
+				olderSecret = certificate.Status.SecretRef
 			}
+			logger.Info("Reconcile Update Event: Attempting to bring resource to desired state")
+			err = r.createCertificate(ctx, *certificate, nil, req, "UpdateRequest")
+			if err != nil {
+				if client.IgnoreAlreadyExists(err) != nil {
+					return ctrl.Result{}, err
+				}
+				logger.Info("Reconcile Update Event: Failed as Certificate already exists")
+			}
+			delete(certificate.GetAnnotations(), "requestType")
+			err = r.Update(ctx, certificate)
+			if err != nil {
+				logger.Error(err, "Reconcile Update Event: Failed to update certificate annotation")
+				return ctrl.Result{}, err
+			}
+			logger.Info("Reconcile Update Event: Certificate Desired State Achived")
+			if olderSecret != "" {
+				err = r.Get(ctx, types.NamespacedName{Name: olderSecret, Namespace: req.Namespace}, secret)
+				if err == nil {
+					logger.Info("Reconcile Update Event: cleanup of older secret")
+					err = r.Delete(ctx, secret)
+					if err != nil {
+						logger.Error(err, "Reconcile Update Event: failed to clean older secret")
+						if client.IgnoreNotFound(err) != nil {
+							certificate.Annotations["requestType"] = "CleanupRequest"
+							certificate.Annotations["deleteSecret"] = olderSecret
+							err = r.Update(ctx, certificate)
+							if err != nil {
+								logger.Error(err, "Reconcile Update Event: Failed to update certificate annotation")
+								return ctrl.Result{}, err
+							}
+							return ctrl.Result{}, err
+						}
+					}
+				}
+			}
+		} else {
+			logger.Info("Reconcile Update Event: Certificate TLS secret reference exists", "Secret", certificate.Spec.SecretRef)
+			logger.Info("Reconcile Update Event: Attempting to bring resource to desired state")
+			err = r.createCertificate(ctx, *certificate, secret, req, "UpdateRequest")
+			if err != nil {
+				logger.Error(err, "Reconcile Update Event: Failed to bring resource to desired state")
+				if client.IgnoreAlreadyExists(err) != nil {
+					return ctrl.Result{}, err
+				}
+				logger.Info("Reconcile Update Event: Failed as Certificate already exists")
+			}
+			logger.Info("Reconcile Update Event: Certificate Renewed")
 		}
+		logger.Info("Reconcile Update Event: Ended")
 	case "CleanupRequest":
-		logger.Info("Cleanup Event: Attempting to delete older secret")
+		logger.Info("Reconcile Cleanup Event: Attempting to delete older secret")
 		secret := &corev1.Secret{}
 		deleteSecret, found := certificate.Annotations["deleteSecret"]
 		if found {
 			err = r.Get(ctx, types.NamespacedName{Name: deleteSecret, Namespace: req.Namespace}, secret)
 			if err == nil {
-				logger.Info("Update Event: cleanup of older secret")
+				logger.Info("Reconcile Cleanup Event: cleanup of older secret")
 				err = r.Delete(ctx, secret)
 				if err != nil {
-					logger.Error(err, "Update Event: failed to clean older secret")
-					return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
+					logger.Error(err, "Reconcile Cleanup Event: failed to cleanup older secret")
+					return ctrl.Result{}, err
 				}
-				delete(certificate.GetAnnotations(), "deleteSecret")
-				delete(certificate.GetAnnotations(), "requestType")
 			}
+			delete(certificate.GetAnnotations(), "deleteSecret")
+		} else {
+			logger.Info("Reconcile Cleanup Event: No older secret found")
 		}
+		logger.Info("Reconcile Cleanup Event: Ended")
 	}
+
+	delete(certificate.GetAnnotations(), "requestType")
+	err = r.Update(ctx, certificate)
+	if err != nil {
+		logger.Error(err, "Reconcile Event: Failed to update certificate annotation")
+		return ctrl.Result{}, err
+	}
+	logger.Info("Reconcile Event: Certificate Reconcilation Ended")
 	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 }
 
@@ -167,46 +214,23 @@ func (r *CertificateReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			oldCert := e.ObjectOld.(*certsv1.Certificate)
 			newCert := e.ObjectNew.(*certsv1.Certificate)
-
-			oldMeta := oldCert.DeepCopy().GetObjectMeta()
-			newMeta := newCert.DeepCopy().GetObjectMeta()
-
-			return !reflect.DeepEqual(oldMeta, newMeta)
+			return !reflect.DeepEqual(oldCert.Spec, newCert.Spec)
 		},
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&certsv1.Certificate{}).
-		Owns(&corev1.Secret{}).
 		WithEventFilter(p).
+		Owns(&corev1.Secret{}).
 		Complete(r)
 }
 
 func (r *CertificateReconciler) createCertificate(ctx context.Context, certificate certsv1.Certificate, secret *corev1.Secret, req ctrl.Request, reason string) error {
 	logger := log.FromContext(ctx)
-	err := r.updateStatus(ctx, req, metav1.Condition{
-		Type:    helper.ConditionPending,
-		Status:  metav1.ConditionTrue,
-		Reason:  reason,
-		Message: fmt.Sprintf("Operation in progress to generate certificate: %s", certificate.Spec.SecretRef),
-	}, nil, nil)
-	if err != nil {
-		logger.Error(err, "Failed to update certificate status", "ConditionType", helper.ConditionPending)
-		return err
-	}
 
 	// Generate a new self-signed certificate
 	cert, key, err := helper.GenerateSelfSignedCertificate(certificate)
 	if err != nil {
 		logger.Error(err, "Failed to generate self-signed certificate")
-		status := r.updateStatus(ctx, req, metav1.Condition{
-			Type:    helper.ConditionFailed,
-			Status:  metav1.ConditionTrue,
-			Reason:  reason,
-			Message: fmt.Sprintf("Failed to generate self-signed certificate"),
-		}, nil, nil)
-		if status != nil {
-			logger.Error(err, "Failed to update certificate status", "ConditionType", helper.ConditionFailed)
-		}
 		return err
 	}
 
@@ -227,18 +251,14 @@ func (r *CertificateReconciler) createCertificate(ctx context.Context, certifica
 		// Create the secret in Kubernetes
 		if err := r.Create(ctx, secret); err != nil {
 			logger.Error(err, "Failed to create secret for TLS certificate")
-			status := r.updateStatus(ctx, req, metav1.Condition{
-				Type:    helper.ConditionFailed,
-				Status:  metav1.ConditionTrue,
-				Reason:  reason,
-				Message: fmt.Sprintf("Failed to create secret for TLS certificate"),
-			}, nil, nil)
-			if status != nil {
-				logger.Error(err, "Failed to update certificate status", "ConditionType", helper.ConditionFailed)
-			}
 			return err
 		}
 		logger.Info("TLS Certificate Issued Successfully", "Secret", certificate.Spec.SecretRef)
+		err = r.updateStatus(ctx, &certificate, false)
+		if err != nil {
+			logger.Error(err, "Failed to update certificate status")
+			return err
+		}
 	} else {
 		secret.Data = map[string][]byte{
 			"tls.crt": cert,
@@ -246,60 +266,25 @@ func (r *CertificateReconciler) createCertificate(ctx context.Context, certifica
 		}
 		if err := r.Update(ctx, secret); err != nil {
 			logger.Error(err, "Failed to update secret from updated TLS certificate")
-			status := r.updateStatus(ctx, req, metav1.Condition{
-				Type:    helper.ConditionFailed,
-				Status:  metav1.ConditionTrue,
-				Reason:  reason,
-				Message: fmt.Sprintf("Failed to update secret from updated TLS certificate: %s", certificate.Spec.SecretRef),
-			}, nil, nil)
-			if status != nil {
-				logger.Error(err, "Failed to update certificate status", "ConditionType", helper.ConditionFailed)
-			}
 			return err
 		}
 		logger.Info("TLS Certificate Updated Successfully", "Secret", certificate.Spec.SecretRef)
-	}
-	validity, _ := time.ParseDuration(certificate.Annotations["validityInHours"])
-	expiredAt := metav1.NewTime(time.Now().Add(validity))
-	err = r.updateStatus(ctx, req, metav1.Condition{
-		Type:    helper.ConditionIssued,
-		Status:  metav1.ConditionTrue,
-		Reason:  reason,
-		Message: fmt.Sprintf("Certificate successfully issued and stored at secretRef: %s", certificate.Spec.SecretRef),
-	}, &expiredAt, nil)
-	if err != nil {
-		logger.Error(err, "Failed to update certificate status", "ConditionType", helper.ConditionIssued)
-		return err
+		err = r.updateStatus(ctx, &certificate, false)
+		if err != nil {
+			logger.Error(err, "Failed to update certificate status")
+			return err
+		}
 	}
 	return nil
 }
 
 func (r *CertificateReconciler) renewCertificate(ctx context.Context, certificate certsv1.Certificate, secret *corev1.Secret, req ctrl.Request) error {
 	logger := log.FromContext(ctx)
-	err := r.updateStatus(ctx, req, metav1.Condition{
-		Type:    helper.ConditionRenewing,
-		Status:  metav1.ConditionTrue,
-		Reason:  "ReconileRequest",
-		Message: fmt.Sprintf("Operation in progress to renew certificate: %s", certificate.Spec.SecretRef),
-	}, nil, nil)
-	if err != nil {
-		logger.Error(err, "Failed to update certificate status", "ConditionType", helper.ConditionRenewing)
-		return err
-	}
 
 	// Generate a new self-signed certificate
 	cert, key, err := helper.GenerateSelfSignedCertificate(certificate)
 	if err != nil {
 		logger.Error(err, "Failed to renew self-signed certificate")
-		status := r.updateStatus(ctx, req, metav1.Condition{
-			Type:    helper.ConditionFailed,
-			Status:  metav1.ConditionTrue,
-			Reason:  "ReconileRequest",
-			Message: fmt.Sprintf("Failed to renew self-signed certificate"),
-		}, nil, nil)
-		if status != nil {
-			logger.Error(err, "Failed to update certificate status", "ConditionType", helper.ConditionFailed)
-		}
 		return err
 	}
 
@@ -310,51 +295,30 @@ func (r *CertificateReconciler) renewCertificate(ctx context.Context, certificat
 
 	if err := r.Update(ctx, secret); err != nil {
 		logger.Error(err, "Failed to update secret from renewed TLS certificate")
-		status := r.updateStatus(ctx, req, metav1.Condition{
-			Type:    helper.ConditionFailed,
-			Status:  metav1.ConditionTrue,
-			Reason:  "ReconileRequest",
-			Message: fmt.Sprintf("Failed to update secret from renewed TLS certificate: %s", certificate.Spec.SecretRef),
-		}, nil, nil)
-		if status != nil {
-			logger.Error(err, "Failed to update certificate status", "ConditionType", helper.ConditionFailed)
-		}
 		return err
 	}
 	logger.Info("TLS Certificate Renewed Successfully", "Secret", certificate.Spec.SecretRef)
-	validity, _ := time.ParseDuration(certificate.Annotations["validityInHours"])
-	expiredAt := metav1.NewTime(time.Now().Add(validity))
-	err = r.updateStatus(ctx, req, metav1.Condition{
-		Type:    helper.ConditionRenewed,
-		Status:  metav1.ConditionTrue,
-		Reason:  "ReconileRequest",
-		Message: fmt.Sprintf("Certificate successfully renewed and stored at secretRef: %s", certificate.Spec.SecretRef),
-	}, &expiredAt, nil)
+	err = r.updateStatus(ctx, &certificate, true)
 	if err != nil {
-		logger.Error(err, "Failed to update certificate status", "ConditionType", helper.ConditionRenewed)
+		logger.Error(err, "Failed to update certificate status")
 		return err
 	}
 	return nil
 }
 
-func (r *CertificateReconciler) updateStatus(ctx context.Context, req ctrl.Request, newCondition metav1.Condition, expiredAt, renewedAt *metav1.Time) error {
-	cert := &certsv1.Certificate{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: req.Name}, cert)
+func (r *CertificateReconciler) updateStatus(ctx context.Context, certificate *certsv1.Certificate, renewed bool) error {
+	logger := log.FromContext(ctx)
+	validity, _ := time.ParseDuration(certificate.Annotations["validityInHours"])
+	certificate.Status.ExpiryDate = metav1.NewTime(time.Now().Add(validity))
+	certificate.Status.SecretRef = certificate.Spec.SecretRef.Name
+	certificate.Status.ObservedGeneration = certificate.Generation
+	if renewed {
+		certificate.Status.RenewedAt = metav1.NewTime(time.Now())
+	}
+	err := r.Status().Update(ctx, certificate)
 	if err != nil {
+		logger.Error(err, "Reconcile Update Event: Failed to update certificate status")
 		return err
 	}
-	for i := range cert.Status.Conditions {
-		cond := &cert.Status.Conditions[i]
-		if cond.Type != newCondition.Type {
-			cond.Status = metav1.ConditionFalse
-		}
-	}
-	if expiredAt != nil {
-		cert.Status.ExpiryDate = *expiredAt
-	}
-	if renewedAt != nil {
-		cert.Status.RenewedAt = *renewedAt
-	}
-	meta.SetStatusCondition(&cert.Status.Conditions, newCondition)
-	return r.Status().Update(ctx, cert)
+	return nil
 }
