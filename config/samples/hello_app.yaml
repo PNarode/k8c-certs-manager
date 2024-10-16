@@ -66,7 +66,7 @@ spec:
   tls: 
     - hosts: 
       - example.com
-      secretName: my-tls-secret
+      secretName: my-certificate-secret
   rules: 
     - host: example.com
       http: 
