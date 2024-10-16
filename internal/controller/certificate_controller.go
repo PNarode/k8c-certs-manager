@@ -81,7 +81,7 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Error(err, "Reconcile Event: Failed to bring resource to desired state")
 				return ctrl.Result{}, client.IgnoreAlreadyExists(err)
 			}
-			return ctrl.Result{}, nil
+			return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
 		}
 
 		// Reconcile and Check if Certificate Renewal is Required
@@ -95,7 +95,7 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Error(err, "Reconcile Event: Failed to renew certificate")
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{}, nil
+			return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
 		}
 	}
 
@@ -111,7 +111,7 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			logger.Info("Reconcile Create Event: Failed as Certificate already exists")
 		}
 		delete(certificate.GetAnnotations(), "requestType")
-		err = r.Update(ctx, certificate)
+		err = r.updateAnnotations(ctx, certificate)
 		if err != nil {
 			logger.Error(err, "Reconcile Create Event: Failed to update certificate annotation")
 			return ctrl.Result{}, err
@@ -137,7 +137,7 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Info("Reconcile Update Event: Failed as Certificate already exists")
 			}
 			delete(certificate.GetAnnotations(), "requestType")
-			err = r.Update(ctx, certificate)
+			err = r.updateAnnotations(ctx, certificate)
 			if err != nil {
 				logger.Error(err, "Reconcile Update Event: Failed to update certificate annotation")
 				return ctrl.Result{}, err
@@ -153,7 +153,7 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 						if client.IgnoreNotFound(err) != nil {
 							certificate.Annotations["requestType"] = "CleanupRequest"
 							certificate.Annotations["deleteSecret"] = olderSecret
-							err = r.Update(ctx, certificate)
+							err = r.updateAnnotations(ctx, certificate)
 							if err != nil {
 								logger.Error(err, "Reconcile Update Event: Failed to update certificate annotation")
 								return ctrl.Result{}, err
@@ -174,7 +174,7 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				}
 				logger.Info("Reconcile Update Event: Failed as Certificate already exists")
 			}
-			logger.Info("Reconcile Update Event: Certificate Renewed")
+			logger.Info("Reconcile Update Event: Certificate Desired State Achived")
 		}
 		logger.Info("Reconcile Update Event: Ended")
 	case "CleanupRequest":
@@ -199,28 +199,28 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	delete(certificate.GetAnnotations(), "requestType")
-	err = r.Update(ctx, certificate)
+	err = r.updateAnnotations(ctx, certificate)
 	if err != nil {
 		logger.Error(err, "Reconcile Event: Failed to update certificate annotation")
 		return ctrl.Result{}, err
 	}
 	logger.Info("Reconcile Event: Certificate Reconcilation Ended")
-	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
+	return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *CertificateReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	p := predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			oldCert := e.ObjectOld.(*certsv1.Certificate)
-			newCert := e.ObjectNew.(*certsv1.Certificate)
-			return !reflect.DeepEqual(oldCert.Spec, newCert.Spec)
+			oldCert := e.ObjectOld.DeepCopyObject().(*certsv1.Certificate)
+			newCert := e.ObjectNew.DeepCopyObject().(*certsv1.Certificate)
+			ret := !reflect.DeepEqual(oldCert.Spec, newCert.Spec)
+			return ret
 		},
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&certsv1.Certificate{}).
 		WithEventFilter(p).
-		Owns(&corev1.Secret{}).
 		Complete(r)
 }
 
@@ -321,4 +321,17 @@ func (r *CertificateReconciler) updateStatus(ctx context.Context, certificate *c
 		return err
 	}
 	return nil
+}
+
+func (r *CertificateReconciler) updateAnnotations(ctx context.Context, certificate *certsv1.Certificate) error {
+	latestCert := &certsv1.Certificate{}
+	err := r.Get(ctx, types.NamespacedName{Name: certificate.Name, Namespace: certificate.Namespace}, latestCert)
+	if err != nil {
+		// Object not found, return. Created objects are automatically garbage collected.
+		return client.IgnoreNotFound(err)
+	}
+	// Prepare the patch for annotations
+	patch := client.MergeFrom(latestCert.DeepCopy())
+	latestCert.Annotations = certificate.GetAnnotations()
+	return r.Patch(ctx, latestCert, patch)
 }

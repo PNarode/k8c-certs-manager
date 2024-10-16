@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"github.com/PNarode/k8c-certs-manager/api/v1"
 	"math/big"
+	"reflect"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strconv"
 	"strings"
 	"time"
@@ -17,17 +19,28 @@ import (
 // +kubebuilder:webhook:path=/mutate-certs-k8c-io-v1-certificate,mutating=true,failurePolicy=fail,sideEffects=None,groups="certs.k8c.io",resources=certificates,verbs=create;update,versions=v1,name=mcertificate.kb.io,admissionReviewVersions=v1
 
 // CertificateAnnotator annotates Certificate Resource
-type CertificateAnnotator struct{}
+type CertificateAnnotator struct {
+	client.Client
+}
 
 func (a *CertificateAnnotator) Default(ctx context.Context, obj runtime.Object) error {
 	log := logf.FromContext(ctx)
-
 	// Check whether certificate mutation was triggered
 	cert, ok := obj.(*v1.Certificate)
 	if !ok {
 		return fmt.Errorf("expected a Certificate but got a %T", obj)
 	}
-
+	existingCert := &v1.Certificate{}
+	err := a.Get(ctx, client.ObjectKey{
+		Namespace: cert.Namespace,
+		Name:      cert.Name,
+	}, existingCert)
+	if client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	if reflect.DeepEqual(cert.Spec, existingCert.Spec) {
+		return nil
+	}
 	log.Info("Mutating Certificate Request")
 
 	if cert.Annotations == nil {
@@ -78,10 +91,10 @@ func (a *CertificateAnnotator) Default(ctx context.Context, obj runtime.Object) 
 	if cert.Spec.RenewBefore == "" {
 		cert.Spec.RenewBefore = "5m"
 	}
+
 	cert.Annotations["requestType"] = "UpdateRequest"
-	log.Info("Mutating State of ", "ObservedGeneration: ", cert.Status.ObservedGeneration)
 	if cert.Status.ObservedGeneration == 0 {
-		log.Info("Its a create operation")
+		log.Info("create operation")
 		cert.Annotations["requestType"] = "CreateRequest"
 	}
 	log.Info("Mutation for Certificate Completed")

@@ -68,6 +68,14 @@ func (v *CertificateValidator) ValidateCreate(ctx context.Context, obj runtime.O
 
 func (v *CertificateValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	logger := logf.FromContext(ctx)
+	cert, ok := newObj.(*v1.Certificate)
+	if !ok {
+		return nil, fmt.Errorf("expected a Certificate but got a %T", newObj)
+	}
+	event, found := cert.Annotations["requestType"]
+	if !found || event != "UpdateRequest" {
+		return nil, nil
+	}
 	logger.Info("Validating Update Certificate Request")
 	return v.validate(ctx, newObj)
 }
