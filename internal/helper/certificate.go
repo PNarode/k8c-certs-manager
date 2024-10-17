@@ -25,12 +25,16 @@ func GenerateSelfSignedCertificate(cert certsv1.Certificate) ([]byte, []byte, er
 	notAfter := notBefore.Add(validity)
 
 	details := cert.Spec
+	commonName := details.DNSName
+	if details.Subject.CommonName != "" {
+		commonName = details.Subject.CommonName
+	}
 	subject := pkix.Name{
 		Country:            details.Subject.Country,
 		Organization:       details.Subject.Organization,
 		OrganizationalUnit: details.Subject.OrganizationalUnit,
 		SerialNumber:       details.Subject.SerialNumber,
-		CommonName:         details.Subject.CommonName,
+		CommonName:         commonName,
 	}
 	template := x509.Certificate{
 		DNSNames:              []string{details.DNSName},

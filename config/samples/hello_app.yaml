@@ -46,6 +46,11 @@ metadata:
   name: certificate-sample
 spec:
   dnsName: example.k8c.io
+  subject:
+    commonName: example.k8c.io
+    country: ["IN"]
+    organization: ["Kubermatics"]
+    organizationalUnit: ["Dev"]
   validity: 360d
   secretRef:
     name: my-certificate-secret
@@ -65,10 +70,10 @@ spec:
   ingressClassName: nginx
   tls: 
     - hosts: 
-      - example.com
+      - example.k8c.io
       secretName: my-certificate-secret
   rules: 
-    - host: example.com
+    - host: example.k8c.io
       http: 
         paths: 
           - path: /

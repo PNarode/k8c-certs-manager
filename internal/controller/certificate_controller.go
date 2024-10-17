@@ -81,7 +81,7 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Error(err, "Reconcile Event: Failed to bring resource to desired state")
 				return ctrl.Result{}, client.IgnoreAlreadyExists(err)
 			}
-			return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
+			return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 		}
 
 		// Reconcile and Check if Certificate Renewal is Required
@@ -95,11 +95,10 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				logger.Error(err, "Reconcile Event: Failed to renew certificate")
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
+			return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 		}
 	}
 
-	logger.Info("Reconcile Event: Event Detected", "RequestType", requestType)
 	switch requestType {
 	case "CreateRequest":
 		logger.Info("Reconcile Create Event: Attempting to create new certificate and secret")
@@ -205,7 +204,7 @@ func (r *CertificateReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 	logger.Info("Reconcile Event: Certificate Reconcilation Ended")
-	return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
+	return ctrl.Result{RequeueAfter: time.Minute * 5}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
