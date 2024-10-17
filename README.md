@@ -349,7 +349,8 @@ prtik@Pratiks-MBP k8c-certs-manager % cat /etc/hosts
 ```
 7. Point your browser to the dnsName and you would see your application being served behind a Self Signed Certificate
 
-![certificate.png](certificate.png)
+<img width="1300" alt="certificate" src="https://github.com/user-attachments/assets/7e8ec1f6-62e0-4c95-806c-8c95104323c2">
+
 
 ## License
 
